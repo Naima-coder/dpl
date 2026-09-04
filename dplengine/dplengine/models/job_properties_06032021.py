@@ -1,0 +1,309 @@
+# filename: job_properties.py
+# author: aswini pinnamraju
+# date: 23-06-2020
+# version: 1.0
+# description: operations performed on data and on dpl functions frame based on the properties in properties.ini file
+
+
+import os
+import logging
+
+from common.process_tracking import ProcessTracking
+from common.profiling import profiling
+
+job_properties = ProcessTracking.capture_process('INIT')
+
+from models.read_props_file import get_property
+log_name = get_property('log_name')
+logging = logging.getLogger(log_name)
+
+class JobProperties:
+
+    def __init__(self):
+        self.job_properties = job_properties
+
+    @staticmethod
+    @profiling
+    def logging_level(logging, log_file_name):
+        """
+        changes the logging level based on the property given in properties.ini
+        :param logging:
+        :param log_file_name:
+        :return: logging configuration
+        """
+        log_file_format = '%(levelname)s - [%(asctime)s] - p%(process)s - {%(filename)s: %(funcName)s :%(lineno)d} -> %(message)s'
+        try:
+
+            # To Remove all handlers associated with the root logger object.
+            for handler in logging.root.handlers[:]:
+                logging.root.removeHandler(handler)
+
+            debug_level = job_properties['logging_level']
+            if debug_level == 'CRITICAL':
+                return logging.basicConfig(filename=log_file_name,
+                                           format=log_file_format,
+                                           level=logging.CRITICAL)
+            elif debug_level == 'ERROR':
+                return logging.basicConfig(filename=log_file_name,
+                                           format=log_file_format,
+                                           level=logging.ERROR)
+            elif debug_level == 'WARNING':
+                return logging.basicConfig(filename=log_file_name,
+                                           format=log_file_format,
+                                           level=logging.WARN)
+            elif debug_level == 'INFO':
+                return logging.basicConfig(filename=log_file_name,
+                                           format=log_file_format,
+                                           level=logging.INFO)
+            elif debug_level == 'DEBUG':
+                return logging.basicConfig(filename=log_file_name,
+                                           format=log_file_format,
+                                           level=logging.DEBUG)
+        except Exception:
+            return logging.basicConfig(filename=log_file_name,
+                                       format=log_file_format,
+                                       level=logging.DEBUG)
+
+    @staticmethod
+    @profiling
+    def detailed_null_validation(dataframe, save_path):
+        """
+        detailed null validations will be saved to a csv file based on flag in properties.ini
+        :param dataframe:
+        :param save_path:
+        :return:
+        """
+        try:
+            detailed_null_file = job_properties['detailed_null_file ']
+            if detailed_null_file == 'True':
+                dataframe.to_csv(save_path, index=None)
+            else:
+                pass
+        except KeyError:
+            return None
+
+    @staticmethod
+    @profiling
+    def validate_duplicate_join_keys(dataframes, join_on):
+        """
+        checks weather the key columns in data frames for join have duplicates
+        :param dataframes:
+        :param join_on:
+        :return:
+        """
+        try:
+            validate_duplicate_join_keys = job_properties["validate_duplicate_join_keys"]
+            if validate_duplicate_join_keys == 'True':
+                if any(df.duplicated(subset=str(join_on)).sum() > 0 for df in dataframes):
+                    raise Exception("detected duplicate keys for join")
+        except KeyError:
+            return None
+
+    @staticmethod
+    @profiling
+    def read_file_chunk(pandas, path, delimiter, header, data_format):
+        """
+        reading the file in chunks
+        :param path: input path
+        :param delimiter:
+        :param header:
+        :param data_format:
+        :return: data frame
+        """
+        try:
+            job_batching = job_properties['data_batching']
+            read_batch_size = int(job_properties['read_batch_size'])
+            if job_batching == 'True':
+                if data_format in ['csv', 'flatfile']:
+                    tmp_df = pandas.read_csv(path, sep=delimiter, header=header,
+                                             iterator=True, chunksize=read_batch_size,
+                                             encoding='unicode_escape')
+                    dataframe = pandas.concat([tmp_df], ignore_index=True)
+                elif data_format == 'excel':
+                    tmp_df = pandas.read_excel(path, index_col=None, header=header)
+                    dataframe = pandas.concat([tmp_df], ignore_index=True)
+                return dataframe
+            else:
+                if data_format in ['csv', 'flatfile']:
+                    dataframe = pandas.read_csv(path, sep=delimiter,
+                                                header=header,
+                                                encoding='unicode_escape')
+                elif data_format == 'excel':
+                    dataframe = pandas.read_excel(path, index_col=None, header=None)
+                return dataframe
+        except Exception as e:
+            if data_format in ['csv', 'flatfile']:
+                dataframe = pandas.read_csv(path, sep=delimiter,
+                                            header=header,
+                                            encoding='unicode_escape')
+            elif data_format == 'excel':
+                dataframe = pandas.read_excel(path, index_col=None, header=header)
+            return dataframe
+
+    @staticmethod
+    @profiling
+    def save_file_chunk(path, data_frame):
+        """
+        saving the file in chunks
+        :param path: input path
+        :param data_frame:
+        :return: data frame
+        """
+        tg_file_name = os.path.basename(path)
+        try:
+            job_batching = job_properties['data_batching']
+            write_batch_size = int(job_properties['write_batch_size'])
+            if job_batching == 'True':
+                data_frame.to_csv(path, index=None, chunksize=write_batch_size)
+                return None
+            else:
+                data_frame.to_csv(path, index=None)
+                return None
+        except Exception:
+            if '.xlsx' in tg_file_name:
+                print("------ save excel file in else ----")
+                data_frame.to_excel(path, index=False)
+            else:
+                data_frame.to_csv(path, index=None)
+            return None
+
+    @staticmethod
+    @profiling
+    def read_db_chunk(pandas, query, connection, query_result):
+        """
+        reading the table in chunks
+        :param query: input path
+        :param connection:
+        :param query_result:
+        :return: data frame
+        """
+        job_batching = None
+        try:
+            job_batching = job_properties['data_batching']
+            read_batch_size = int(job_properties['read_batch_size'])
+            if job_batching == 'True':
+                # Create empty list
+                dfl = []
+
+                # Create empty dataframe
+                dataframe = pandas.DataFrame()
+
+                # Start Chunking
+                print("start Chunking")
+                logging.info(f"Reading dataframe in chunks with chunksize: {read_batch_size}")
+                for chunk in pandas.read_sql(query, con=connection, chunksize=read_batch_size):
+                    # Start Appending Data Chunks from SQL Result set into List
+                    print("Appending batch data-------")
+                    dfl.append(chunk)
+                # Start appending data from list to dataframe
+                dataframe = pandas.concat(dfl, ignore_index=True)
+
+                return dataframe
+            else:
+                dataframe = pandas.DataFrame(query_result)
+                return dataframe
+
+        except Exception as e:
+            if 'bool' in str(e):
+                dataframe = pandas.DataFrame(query_result)
+                return dataframe
+
+            elif job_batching == 'True':
+                dataframe = pandas.DataFrame(query_result)
+                return dataframe
+            else:
+                print('Exception: ' + str(e))
+                logging.error(f"Exception occurred while reading table: {e}")
+                raise Exception(e)
+
+    @staticmethod
+    @profiling
+    def save_db_chunk(query, values, connection, cursor):
+        """
+        saving the data frame to table in chunks
+        :param query:
+        :param values:
+        :param connection:
+        :param cursor:
+        :return: row count
+        """
+        # values = [tuple(val) for val in values]
+        try:
+            job_batching = job_properties['data_batching']
+            write_batch_size = int(job_properties['write_batch_size'])
+            if job_batching == 'True':
+                # Inserting data as batches
+                logging.info(f"Saving data into table in batches with batch_size: {write_batch_size}")
+                cursor_count = 0
+                for num in range(0, len(values), write_batch_size):
+                    data = values[num:num + write_batch_size]
+                    # cursor.executemany(query, data, batcherrors=True)
+                    # Added on 09072020 to insert timestamp column along with nano seconds
+                    cursor.prepare(query)
+                    cursor.executemany(None, data, batcherrors=True)
+                    cursor_count += cursor.rowcount
+                # Ended on 09072020 to insert timestamp column along with nano seconds
+                connection.commit()
+                if len(values) == 0:
+                    return 0
+                else:
+                    return cursor_count
+
+            else:
+                # cursor.executemany(query, values)
+                # Added on 09072020 to insert timestamp column along with nano seconds
+                cursor.prepare(query)
+                cursor.executemany(None, values)
+                # Ended on 09072020 to insert timestamp column along with nano seconds
+                connection.commit()
+                if len(values) == 0:
+                    return 0
+                else:
+                    return cursor.rowcount
+        except Exception as e:
+            logging.warning(f"Error: {e}\nException occurred while inserting data trying to insert again")
+            # cursor.executemany(query, values)
+            # Added on 09072020 to insert timestamp column along with nano seconds
+            cursor.prepare(query)
+            cursor.executemany(None, values)
+            # Ended on 09072020 to insert timestamp column along with nano seconds
+            connection.commit()
+            if len(values) == 0:
+                return 0
+            else:
+                return cursor.rowcount
+
+    @staticmethod
+    @profiling
+    def get_memory_resource_limit():
+        """
+        Getting memory_usage limits from properties.ini file
+        If no limits were given by default it sets to 8gb
+        :return: soft-limit, hard-limit values
+        """
+        try:
+            try:
+                soft_memory_limit = float(job_properties['soft_memory_limit'])
+            except KeyError:
+                soft_memory_limit = -1
+            try:
+                hard_memory_limit = float(job_properties['hard_memory_limit'])
+            except KeyError:
+                hard_memory_limit = -1
+
+            if soft_memory_limit == -1 and hard_memory_limit == -1:
+                soft_memory_limit = hard_memory_limit = 8
+
+            if soft_memory_limit == -1:
+                soft_memory_limit = hard_memory_limit
+
+            if hard_memory_limit == -1:
+                hard_memory_limit = soft_memory_limit
+
+            if soft_memory_limit != -1 and hard_memory_limit != -1:
+                if soft_memory_limit > hard_memory_limit:
+                    raise Exception("Soft_memory_limit cannot be more than hard_memory_limit")
+            logging.info(f"soft_memory: {soft_memory_limit}, hard_memory_limit: {hard_memory_limit}")
+            return soft_memory_limit, hard_memory_limit
+        except Exception as e:
+            raise e

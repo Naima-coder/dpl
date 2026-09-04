@@ -1,0 +1,430 @@
+# filename: data_operations.py
+# author: saranya siragam
+# date: 23-06-2020
+# version: 1.0
+# description: using detailed json reads a source data set into a data frame, performs validations and other operations
+# on the data frame which are mentioned in the dpl config/yml file
+
+from datetime import datetime
+
+from common.process_tracking import ProcessTracking
+from common.profiling import profiling
+from common.regex_operations import dataframe_columns_mapping
+from common.regex_operations import run_time_parameters
+from models import get_dataset_details
+from models import process_datasets
+
+
+@profiling
+def get_dataframe(json_detailed, logging):
+    """
+    :param json_detailed:
+    :param logging:
+    :return: final data frame
+    """
+
+    print("-----------------------------------------------------------------------------------------")
+
+    global variable_names_list
+    global variable_values_list
+
+    # input data section
+    input_dss = json_detailed['input']['DataSources']
+
+    # output data section
+    output_dss = json_detailed['output']['DataTargets']
+
+    null_count = []
+    operation_seq_data_frames = []
+    df_names = []
+
+    # data process section
+    processing = json_detailed['data']['Processing']
+    variable_names_list = []
+    variable_values_list = []
+
+    # Checking in whether any dataset is to be saved
+    print("Checking in whether any dataset is to be saved")
+    logging.debug("Checking in whether any dataset is to be saved\n")
+
+    for entry in input_dss:
+        for _ in input_dss[entry]:
+            # print(datasource)
+            """
+            List of datasets relevant to data source(Database or FileSystem)
+            """
+            # print(datasource['datasets'])
+            datasets_list = _['datasets']
+            for dataset_details in datasets_list:
+                if dataset_details['op_output']:
+                    print("Saving dataset: " + str(dataset_details['dataset']) + " to target")
+                    logging.debug("Saving dataset: " + str(dataset_details['dataset']) + " to target")
+                    try:
+                        dataset_df = get_dataset_details.dataset_details(
+                            input_dss, dataset_details['dataset'], logging)
+                    except Exception as e:
+                        logging.error(f"Error occured while reading dataset {dataset_details['dataset']}")
+                        print("Error occured while reading dataset :", e)
+                        exit()
+
+                    try:
+                        if dataset_df.empty:
+                            logging.warn("Dataset: '" + str(dataset_df) + "' is empty")
+                            ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                                            f"[pyprocessstep:{'none'}]"
+                                                            f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                                            f"[dploperation:{'none'}][pyoperation:{'none'}]"
+                                                            f"[pyobject:{'none'}]"
+                                                            f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                                            f"[dpldataset:{'none'}]"
+                                                            f"[timestamp:{datetime.now()}]")
+                            print("\nException:------------------")
+                            raise Exception("Dataset: '" + str(dataset_df) + "' is empty")
+
+                        try:
+                            get_dataset_details.dataset_details(
+                                output_dss, dataset_details['dataset'], logging,
+                                flag='save', dataframe=dataset_df)
+                        except Exception as e:
+                            logging.error(f"Error occured while saving dataset {dataset_details['dataset']}")
+                            print("Error occured while saving dataset :", e)
+                            exit()
+                    except Exception as e:
+                        print(e)
+                        print(f"Dataset: '" + str(dataset_details['dataset']) + "' is empty")
+                        exit()
+
+    print("-----------------------------------------------------------------------------------------")
+
+    # When Operations are given
+    if any('Operations' in key for key in processing):
+        operations = processing['Operations']
+        for operation in operations:
+            print("Op_Seq_No: "+str(operation['op_seq'])+"\n")
+            df = []
+            logging.debug("Performing op_seq: " + str(operation['op_seq']))
+            logging.debug("Operation_details: "+str(operation))
+            logging.debug("Reading datasets as dataframes in given data operation")
+
+            # Reading datasets into data-frames using pandas in given operation
+            if type(operation['datasets']) != list:
+                try:
+                    if ',' in operation['datasets']:
+                        operation['datasets'] = operation['datasets'].split(",")
+                    else:
+                        operation['datasets'] = [operation['datasets']]
+                except TypeError as te:
+                    logging.warn("TypeError raised" + str(te))
+                    operation['datasets'] = [operation['datasets']]
+            operation_dataset_names = '[ '
+            for dataset in operation['datasets']:
+                if type(dataset) == int:
+                    # Appends dataframe of the particular operational sequence
+                    try:
+                        operation_dataset_names += 'op_seq:'+str(dataset)+', '
+                        position = df_names.index(dataset)
+                        df.append(operation_seq_data_frames[position])
+                    except Exception as e:
+                        ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                                        f"[pyprocessstep:{'none'}]"
+                                                        f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                                        f"[dploperation:{str(operation['op_seq'])}][pyoperation:{str(operation['op_type'])}]"
+                                                        f"[pyobject:{'none'}]"
+                                                        f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                                        f"[dpldataset:{'none'}]"
+                                                        f"[timestamp:{datetime.now()}]")
+                        raise Exception("Invalid operational sequence format")
+
+                else:
+                    # Appends dataframe of the particular dataset
+                    operation_dataset_names += dataset+', '
+                    dataset_df = (get_dataset_details.dataset_details(
+                        input_dss, dataset, logging, opseq=operation['op_seq']))
+                    try:
+                        if not dataset_df.empty:
+                            df.append(dataset_df)
+                        else:
+                            logging.warn("Dataset: '" + str(dataset) + "' is empty")
+                            print("\nException:------------------")
+                            ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                                            f"[pyprocessstep:{'none'}]"
+                                                            f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                                            f"[dploperation:{str(operation['op_seq'])}][pyoperation:{str(operation['op_type'])}]"
+                                                            f"[pyobject:{'none'}]"
+                                                            f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                                            f"[dpldataset:{dataset}]"
+                                                            f"[timestamp:{datetime.now()}]")
+                            raise Exception("Dataset: '" + str(dataset) + "' is empty")
+
+                    except Exception as e:
+                        print(e)
+                        print(f"Dataset: '" + str(dataset) + "' is empty")
+                        exit()
+
+            operation_dataset_names = operation_dataset_names[:-2]
+            operation_dataset_names += ' ]'
+
+            # Applying data_operations for given datasets
+            if operation['op_type'] in ['union','union', 'UNION']:
+                ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                                f"[pyprocessstep:{'none'}]"
+                                                f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                                f"[dploperation:{operation['op_seq']}][pyoperation:{str(operation['op_type'])}]"
+                                                f"[pyobject:{'none'}]"
+                                                f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                                f"[dpldataset:{operation_dataset_names}]"
+                                                f"[timestamp:{datetime.now()}]")
+                logging.info("Performing union operation on datasets: "+operation_dataset_names)
+                # Concat's given set of datasets
+                intm_dataframe = process_datasets.concat_data_frames(df, logging)
+                df_names.append(operation['op_seq'])
+
+                operation_seq_data_frames.append(intm_dataframe)
+
+            elif operation['op_type'] in ['join','Join', 'JOIN']:
+                ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                                f"[pyprocessstep:{'none'}]"
+                                                f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                                f"[dploperation:{operation['op_seq']}][pyoperation:{str(operation['op_type'])}]"
+                                                f"[pyobject:{'none'}]"
+                                                f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                                f"[dpldataset:{operation_dataset_names}]"
+                                                f"[timestamp:{datetime.now()}]")
+                logging.info("Performing join operation on datasets: "+operation_dataset_names)
+                # Merges the given set of datasets
+                cond = {}
+                try:
+                    cond['on'] = operation['op_cond']
+                except KeyError:
+                    cond['on'] = None
+                try:
+                    cond['how'] = operation['op_subtype']
+                except KeyError:
+                    cond['how'] = None
+                # print(len(df))
+                intm_dataframe = process_datasets.merge_data_frames(df, cond, logging)
+                print("intermediate df", intm_dataframe)
+                df_names.append(operation['op_seq'])
+
+                operation_seq_data_frames.append(intm_dataframe)
+
+            # Transformations are performed
+            elif operation['op_type'] == 'transformations':
+                ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                                f"[pyprocessstep:{'none'}]"
+                                                f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                                f"[dploperation:{operation['op_seq']}][pyoperation:{str(operation['op_type'])}]"
+                                                f"[pyobject:{'none'}]"
+                                                f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                                f"[dpldataset:{operation_dataset_names}]"
+                                                f"[timestamp:{datetime.now()}]")
+                logging.info("Performing transformations on dataset: "+operation_dataset_names)
+                transformations = operation['Transformations']
+                for dataset_df in df:
+                    intm_dataframe = transformations_functions(transformed_df=dataset_df,
+                                                               transformations=transformations, logging=logging)
+                operation_seq_data_frames.append(intm_dataframe)
+                df_names.append(operation['op_seq'])
+
+            # Filling null values
+            elif operation['op_type'] == 'fill_null':
+                logging.info("Filling null values of dataset: "+operation_dataset_names+' to given value.')
+                if type(operation['op_col']) != list:
+                    try:
+                        if ',' in operation['op_col']:
+                            operation['op_col'] = operation['op_col'].split(",")
+                        else:
+                            operation['op_col'] = [operation['op_col']]
+                    except TypeError as te:
+                        logging.warn("TypeError raised" + str(te))
+                        operation['op_col'] = [operation['op_col']]
+                for dataset_df in df:
+                    for col in operation['op_col']:
+                        dataset_df[str(col)].fillna(operation['op_value'], inplace=True)
+                intm_dataframe = dataset_df
+                ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                                f"[pyprocessstep:{'none'}]"
+                                                f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                                f"[dploperation:{operation['op_seq']}][pyoperation:{str(operation['op_type'])}]"
+                                                f"[pyobject:{'none'}]"
+                                                f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                                f"[dpldataset:{operation_dataset_names}]"
+                                                f"[timestamp:{datetime.now()}]")
+                operation_seq_data_frames.append(intm_dataframe)
+                df_names.append(operation['op_seq'])
+
+            # Executing given commands on dataframe
+            elif operation['op_type'] == 'command':
+                logging.info(f"Performing given commands on: {operation_dataset_names} ")
+                for dataset_df in df:
+                    intm_dataframe = process_datasets.commands_execute(dataframe=dataset_df,
+                                                                       command=operation['op_cond'],
+                                                                       command_type=operation['op_subtype'])
+                    print(type(intm_dataframe))
+                    if 'pandas.core.frame.DataFrame' in str(type(intm_dataframe)):
+                        operation_seq_data_frames.append(intm_dataframe)
+                        df_names.append(operation['op_seq'])
+            elif operation['op_type'] == 'read':
+                for dataset_df in df:
+                    intm_dataframe = dataset_df
+                    operation_seq_data_frames.append(dataset_df)
+                    df_names.append(operation['op_seq'])
+
+            print("-----------------------------------------------------------------------------------------")
+            print("op_seq: " + str(operation['op_seq']))
+            print(intm_dataframe)
+            print("-----------------------------------------------------------------------------------------")
+
+            # Checking whether operation seq is to be saved
+            if any('op_output' in key for key in operation):
+                if operation['op_output'] == True:
+                    print("operation df to be saved")
+                    logging.debug("Saving op_seq: "+str(operation['op_seq']))
+                    get_dataset_details.dataset_details(
+                        output_dss, operation['op_seq_name'], logging, flag='save', dataframe=intm_dataframe)
+                else:
+                    variable_names_list.append(operation['op_output'])
+                    variable_values_list.append(intm_dataframe)
+                    print(variable_names_list, variable_values_list)
+
+            logging.debug("Op_Seq_No: "+str(operation['op_seq'])+' completed\n---------------------------------------------------------------')
+            print("Op_Seq_No: "+str(operation['op_seq'])+' completed\n---------------------------------------------------------------')
+            ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                            f"[pyprocessstep:{'none'}]"
+                                            f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                            f"[dploperation:{operation['op_seq']}][pyoperation:{str(operation['op_type'])}]"
+                                            f"[pyobject:{'none'}]"
+                                            f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                            f"[dpldataset:{'none'}]"
+                                            f"[timestamp:{datetime.now()}]\n")
+        if operation_seq_data_frames:
+            operation_df = operation_seq_data_frames[-1]
+
+    # When no operations are given
+    if not operation_seq_data_frames:
+        df = []
+        for entry in input_dss:
+            for datasource in input_dss[entry]:
+                """
+                List of datasets relevant to data
+                 source(Database or FileSystem)
+                """
+                datasets_list = datasource['datasets']
+                for dataset_details in datasets_list:
+                    df.append(get_dataset_details.dataset_details(
+                        input_dss, dataset_details['dataset'], logging))
+
+        if len(df) > 1:
+            # Concats the given dataframes
+            operation_df = process_datasets.concat_data_frames(df, logging)
+        else:
+            # When only one dataset is given
+            operation_df = df[0]
+    print("-----------------------------------------------------------------------------------------")
+    print('final operational dataframe...........')
+    print(operation_df)
+    print("-----------------------------------------------------------------------------------------")
+
+    """
+    Checking for data transformation in data section
+    """
+    operation_df = transformations_functions(operation_df, processing, logging)
+
+    """
+    Checking for data transformation in output section
+    """
+    transformations = json_detailed['output']['Transformations']
+    # print(transforamtions)
+
+    if transformations != {}:
+        logging.debug("Performing transformations given in output section: ")
+        operation_df = transformations_functions(transformed_df=operation_df, transformations=transformations,
+                                                 logging=logging)
+
+    final_dataframe = operation_df
+    print("final dataframe after processing")
+    print(final_dataframe)
+    print("-----------------------------------------------------------------------------------------")
+    if not null_count:
+        return final_dataframe
+    else:
+        print("NULL Check results: ")
+        for count in null_count:
+            print(f'\t {count}')
+        print()
+        return final_dataframe
+
+
+@profiling
+def transformations_functions(transformed_df, transformations, logging, opseq=None):
+    """
+
+    :param transformed_df:
+    :param transformations:
+    :param logging:
+    :return:
+    """
+    try:
+        if any('DerivedColumns' in key for key in transformations):
+            # Appends new columns with given formula
+            derivedcolumns = \
+                transformations['DerivedColumns']
+            ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                            f"[pyprocessstep:{'none'}]"
+                                            f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                            f"[dploperation:{'none'}][pyoperation:{'none'}]"
+                                            f"[pyobject:{derivedcolumns}]"
+                                            f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                            f"[dpldataset:{'none'}]"
+                                            f"[timestamp:{datetime.now()}]")
+            # Looping over column to be derived from derived columns
+            if derivedcolumns:
+                for derived_col in derivedcolumns:
+                    print(derived_col)
+                    # print(operation_df)
+                    derived_col['formula'] = run_time_parameters(derived_col['formula'],
+                                                                 varaiable_names=variable_names_list,
+                                                                 variable_values=variable_values_list)
+                    transformed_df = process_datasets.derived_columns(
+                        transformed_df, derived_col, logging)
+
+        # Applying Filters
+        if any('Filters' in key for key in transformations):
+            if transformations['Filters']:
+                for _ in transformations['Filters']:
+                    filters = _['fil_list']
+                    filters = run_time_parameters(filters,varaiable_names=variable_names_list,
+                                                  variable_values=variable_values_list)
+                    ProcessTracking.capture_process(f"[jobname:{'jobname'}][jobdate:{datetime.now()}]"
+                                                    f"[pyprocessstep:{'none'}]"
+                                                    f"[pyreturncode:{'RC'}][pyreturncodeval:{'0'}]"
+                                                    f"[dploperation:{'none'}][pyoperation:{'none'}]"
+                                                    f"[pyobject:{filters}]"
+                                                    f"[pyconnection:{'none'}][dpldbtype:{'none'}]"
+                                                    f"[dpldataset:{'none'}]"
+                                                    f"[timestamp:{datetime.now()}]")
+                    if filters:
+                        transformed_df = process_datasets.filter_data_frame(transformed_df, filters, logging)
+
+        # Selecting columns
+        if any('FinalColumns' in key for key in transformations):
+            if transformations['FinalColumns']:
+                for _ in transformations['FinalColumns']:
+                    req_columns = _['col_list']
+
+                if req_columns:
+                    req_columns = dataframe_columns_mapping(transformed_df, req_columns)
+                    transformed_df = transformed_df[req_columns]
+                    logging.debug(f"Selecting {req_columns} from data frame")
+
+        # Renaming columns
+        if any('RenamedColumns' in key for key in transformations):
+            renamed_col = transformations['RenamedColumns']
+            transformed_df = process_datasets.rename_columns(
+                transformed_df, renamed_col, logging)
+
+        return transformed_df
+    except Exception as e:
+        logging.error("Exception in transformations block" + str(e))
+        raise e
+    pass

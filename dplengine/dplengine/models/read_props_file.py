@@ -1,0 +1,54 @@
+# filename: read_props_file.py
+# author: aswini pinnamraju
+# date: 23-06-2020
+# version: 1.0
+# description: reads .properties files
+
+import os
+
+def read_property(file_path):
+    """
+    reading properties from .properties file from the given file path
+    :param : 
+    :return: dictionary
+    """""
+    separator = "="
+    dictionary = {}
+
+    with open(file_path, 'r') as f:
+
+        for line in f:
+            if separator in line:
+                # Find the name and value by splitting the string
+                name, value = line.split(separator, 1)
+
+                # Assign key value pair to dict
+                # strip() removes white space from the ends of strings
+                dictionary[name.strip()] = value.strip()
+    return dictionary
+
+
+def get_property(property_key):
+    """
+    fetching the property value from the property key in .properties file
+    :param property_key: 
+    :return: property value
+    """""
+    # file_path = str(os.environ.get('DPL_ROOT'))+"/dplengine/dpl_engine.properties"
+    # file_path = str("/u01/apps/config"+"/dplengine/dpl_engine.properties")
+    file_path = str("/u01/apps/config/dplharmony/properties/dpl_engine.properties")
+    dpl_engine_props = read_property(file_path)
+    property_value = None
+    try:
+        if '/' in str(property_key) or '\\' in str(property_key):
+            property_value = property_key
+        else:
+            try:
+                property_value = dpl_engine_props[str(property_key).strip()]
+            except Exception as error:
+                print(f"please check the properties file for appropriate key: {property_key}")
+                print("------- exiting job due to unknown property -------")
+                exit(1)
+    except Exception as error:
+        print("error", error)
+    return property_value
